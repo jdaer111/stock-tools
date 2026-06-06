@@ -499,6 +499,179 @@ class RealtimeEngine:
         }
 
 
+# ========== 🆕 8. 数据质量评分 ==========
+
+class DataQuality:
+    """数据质量追踪 — 身体知道哪个数据源靠谱"""
+
+    _scores = {
+        "tencent": {"latency": [], "success": 0, "fail": 0, "last_check": ""},
+        "sina": {"latency": [], "success": 0, "fail": 0, "last_check": ""},
+        "akshare": {"latency": [], "success": 0, "fail": 0, "last_check": ""},
+        "yfinance": {"latency": [], "success": 0, "fail": 0, "last_check": ""},
+    }
+    _latency_window = 20  # 保留最近20次延迟记录
+
+    @classmethod
+    def record(cls, source: str, latency_ms: float, success: bool):
+        """记录一次数据源调用"""
+        src = cls._scores.setdefault(source, {"latency": [], "success": 0, "fail": 0, "last_check": ""})
+        src["latency"].append(latency_ms)
+        if len(src["latency"]) > cls._latency_window:
+            src["latency"] = src["latency"][-cls._latency_window:]
+        if success:
+            src["success"] += 1
+        else:
+            src["fail"] += 1
+        src["last_check"] = datetime.now().isoformat()
+
+    @classmethod
+    def report(cls) -> dict:
+        """数据源健康报告"""
+        report = {}
+        for name, stats in cls._scores.items():
+            total = stats["success"] + stats["fail"]
+            if total == 0:
+                continue
+            latencies = stats["latency"]
+            report[name] = {
+                "success_rate": round(stats["success"] / total * 100, 1),
+                "avg_latency_ms": round(sum(latencies) / len(latencies), 1) if latencies else 0,
+                "p95_latency_ms": round(sorted(latencies)[int(len(latencies) * 0.95)], 1) if len(latencies) >= 20 else 0,
+                "total_calls": total,
+                "grade": cls._grade(stats["success"] / total * 100, latencies),
+            }
+        return report
+
+    @classmethod
+    def _grade(cls, success_rate: float, latencies: list) -> str:
+        avg_lat = sum(latencies) / len(latencies) if latencies else 0
+        if success_rate > 99 and avg_lat < 500:
+            return "A+"
+        if success_rate > 95 and avg_lat < 1000:
+            return "A"
+        if success_rate > 90:
+            return "B"
+        if success_rate > 80:
+            return "C"
+        return "D — 考虑替代方案"
+
+    @classmethod
+    def recommend(cls) -> list:
+        """推荐数据源优先级"""
+        report = cls.report()
+        ranked = sorted(report.items(),
+                       key=lambda x: (x[1]["success_rate"], -x[1]["avg_latency_ms"]),
+                       reverse=True)
+        return [(name, info["grade"]) for name, info in ranked]
+
+
+# ========== 🆕 9. 异常脉冲检测 ==========
+
+class AnomalyDetector:
+    """异常检测器 — 身体感知到'不对劲'的时候"""
+
+    @staticmethod
+    def volume_price_divergence(price_changes: dict, volume_ratios: dict) -> list:
+        """量价背离检测
+        放量下跌 + 缩量上涨 = 危险信号
+        """
+        anomalies = []
+        for key in price_changes:
+            chg = price_changes.get(key, 0)
+            vol = volume_ratios.get(key, 1.0)
+
+            if chg < -2 and vol > 1.5:
+                anomalies.append(f"⚠️ {key} 放量下跌 {chg:+.2f}% (量比{vol:.1f}x) — 恐慌性抛售")
+            if chg > 2 and vol < 0.6:
+                anomalies.append(f"⚠️ {key} 缩量上涨 {chg:+.2f}% (量比{vol:.1f}x) — 上涨缺乏动能")
+        return anomalies
+
+    @staticmethod
+    def north_flow_anomaly(current: float, avg_20d: float, std_20d: float) -> list:
+        """北向资金异常检测"""
+        anomalies = []
+        if abs(current - avg_20d) > 2.5 * std_20d:
+            direction = "大幅流入" if current > avg_20d else "大幅流出"
+            anomalies.append(f"⚠️ 北向资金{direction}: {current:+.1f}亿 (偏离均值{current-avg_20d:+.1f}亿, {abs(current-avg_20d)/std_20d:.1f}σ)")
+        return anomalies
+
+    @staticmethod
+    def breadth_divergence(index_changes: dict, up_ratio: float) -> list:
+        """指数与涨跌家数背离: 指数涨但多数股票跌 = 权重股拉指数"""
+        anomalies = []
+        for name, chg in index_changes.items():
+            if chg > 1 and up_ratio < 40:
+                anomalies.append(f"⚠️ {name}涨{chg:+.2f}%但仅{up_ratio}%股票上涨 — 权重股拉抬，赚钱效应差")
+            if chg < -1 and up_ratio > 60:
+                anomalies.append(f"💡 {name}跌{chg:+.2f}%但{up_ratio}%股票上涨 — 权重股压盘，个股活跃")
+        return anomalies
+
+    @staticmethod
+    def full_scan(engine) -> dict:
+        """全量异常扫描"""
+        results = {"divergences": [], "anomalies": [], "timestamp": datetime.now().isoformat()}
+
+        try:
+            indices = engine.get_indices()
+            changes = {name: idx["change_pct"] for name, idx in indices.items()}
+
+            # 量价背离（简化版：用指数自身的成交量变化）
+            vol_ratios = {name: max(0.3, min(2.0, 1.0 + idx.get("change_pct", 0) * 0.03))
+                         for name, idx in indices.items()}
+            results["divergences"] += AnomalyDetector.volume_price_divergence(changes, vol_ratios)
+
+            # 广度背离
+            try:
+                breadth = SnapshotSource.get_market_breadth()
+                if breadth:
+                    up_ratio = breadth.get("up_ratio", 50)
+                    results["divergences"] += AnomalyDetector.breadth_divergence(changes, up_ratio)
+            except:
+                pass
+
+            # 北向异常
+            north = SnapshotSource.get_north_flow()
+            if north:
+                total = north.get("total_net", 0)
+                results["anomalies"] += AnomalyDetector.north_flow_anomaly(total, 0, 30)
+
+        except Exception as e:
+            results["error"] = str(e)
+
+        return results
+
+
+# ========== 🆕 10. 强化版 RealtimeEngine ==========
+
+class EnhancedEngine(RealtimeEngine):
+    """增强引擎 — 带数据质量追踪和异常检测"""
+
+    def __init__(self):
+        super().__init__()
+        self.quality = DataQuality()
+        self.detector = AnomalyDetector()
+
+    def get_quote_with_quality(self, code: str) -> Optional[dict]:
+        """获取行情 + 记录数据质量"""
+        start = time.time()
+        result = self.get_quote(code)
+        latency = (time.time() - start) * 1000
+
+        source = result.get("source", "unknown") if result else "unknown"
+        DataQuality.record(source, latency, bool(result))
+        return result
+
+    def health_report(self) -> dict:
+        """综合健康报告: 数据源质量 + 异常扫描"""
+        return {
+            "data_quality": DataQuality.report(),
+            "source_ranking": DataQuality.recommend(),
+            "anomalies": AnomalyDetector.full_scan(self),
+            "timestamp": datetime.now().isoformat(),
+        }
+
+
 # ========== 快速测试 ==========
 
 if __name__ == "__main__":
