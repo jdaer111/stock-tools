@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.Python
+venv/
+.env
+
+# 数据缓存
+.cache/
+*.csv
+*.xlsx
+
+# IDE
+.vscode/
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 大文件
+*.png
+*.jpg
+*.html
+
+# Jupyter
+.ipynb_checkpoints/
