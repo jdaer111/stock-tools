@@ -65,3 +65,31 @@ start <代码>_交互K线.html
 
 ## 项目地址
 https://github.com/jdaer111/stock-tools
+
+---
+
+## 🔄 自动升级机制
+
+### 一键升级（推荐每周运行）
+```bash
+cd C:\Users\35273\workplace
+bash update.sh
+```
+升级内容：
+1. Python 依赖包（akshare/yfinance/plotly/streamlit...）
+2. GitHub 开源库（akshare/qlib/PyPortfolioOpt/backtrader...）
+3. 自己的 stock-tools 代码
+4. 环境验证
+
+### 手动升级单项
+```bash
+pip install --upgrade akshare        # 升级A股数据源
+cd lib/qlib && git pull && cd ../..   # 升级微软量化框架
+```
+
+### 贡献自己的改进
+```bash
+git add -A
+git commit -m "描述你的改进"
+git push
+```
